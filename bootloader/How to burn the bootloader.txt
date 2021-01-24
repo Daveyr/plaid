@@ -1,0 +1,88 @@
+# How to burn the bootloader on the plaid keyboard
+
+## You will need
+
+* Arduino (I used a nano but an uno is typically used)
+* Male-female jumper wire and breadboard and 10nF electrolytic capacitor (if using a nano) OR
+* Female-female jumper wire (if using an uno)
+* USB cable
+* Computer with arduino software installed
+* Avrdude installed
+* [QMK](https://qmk.fm/) installed
+
+## Prepare the arduino
+Upload the inbuilt example sketch called ArduinoISP using the Arduino software to the arduino board. My Nano was old and a cheap clone so I needed to set the board as "Arduino Nano" and processor "ATmega328P(Old Bootloader)". Once this sketch is uploaded the Arduino has become an AVRISP programmer with a baud rate of 19200 (different speeds can be set but this is the default in the sketch).
+
+## Prepare the keyboard
+First prepare the hardware. With a Nano, it is best to plant it on a breadboard and use Male-female jumper wire to make the connection. Another peculiarity of the Nano, you need to place a 10nF electrolytic capacitor between ground and reset (negative to ground). According to [this site](http://www.martyncurrey.com/arduino-nano-as-an-isp-programmer/), the capacitor is needed to keep the reset pin high. 
+
+Connect wires between the 6 pins on the plaid keyboard labelled "ISP" to the arduino. From the pcb layout I worked out what the pinout should be for the 6 pins, outlined below.
+
+### ISP pinout configuration
+
+The arrow on the plaid silkscreen next to one of the ISP pins is designated pin 1. If pin 1 is at the top left we read the numbers left to right and up to down. With this in mind, connect each pin to the arduino pin named below:
+
+1. D12
+2. +5V pin
+3. D13
+4. D11
+5. RESET (D10)
+6. GND
+
+## Make the bootloader file
+
+There are a few ways to make and burnt the bootloader. You only have to choose one method.
+
+### The straightforward command line way
+By far the easiest way to do this is to download [this hex file](file) I made earlier. Thanks to Github user [itsnoeasy](https://github.com/hsgw/plaid/issues/10#issuecomment-583849113), this is how I made it.
+
+In a terminal window in your qmk folder, type `make dm9records/plaid:default`. This compiles a hex file of the keyboard firmware. Edit this file in a text editor to remove the last line, which should read :00000001FF. Then append the contents of [this hex file](https://github.com/hsgw/USBaspLoader/blob/plaid/firmware/main.hex), which comes from the USBASPLoader repository. What we're doing is concatenating the plaid firmware with the bootloader so that not only do we have a working keyboard but also the ability to upload new firmware by usb in future. Rename the file to `plaid_default.hex`.
+
+#### Burn the bootloader
+
+In the same terminal window, enter the following.
+
+```
+avrdude -u -c avrisp -p m328p -P /dev/ttyUSB0 -b 19200 -U flash:w:"plaid_default.hex":a -U lfuse:w:0xF7:m -U hfuse:w:0xD0:m -U efuse:w:0xfc:m
+```
+
+What's going on here? We execute avrdude with a series of arguments, comprising the following in order
+
+* `-u` disables safemode
+* `-c avrisp` is the programmer. We are using an arduino as a programmer, but we made it into an avrisp using the sketch earlier
+* `-p m328p` is the target chip on the keyboard, which is an ATmega328p
+* `-P /dev/ttyUSB0` is the target port where the Nano is located. It is highly likely that this is the same for you, but could be different if, for instance, you have other USB devices connected. Check >menu>port in the Arduino software if unsure.
+* `-b 19200` is the baud rate. If you changed this in the avrisp sketch then change it here too
+* `-U flash:w:"plaid_default.hex":a` is the .hex file to upload, referred to earlier. If you are not in the folder where this is located then you will need to specify the filepath as well as the filename.
+* `-U lfuse:w:0xF7:m -U hfuse:w:0xD0:m -U efuse:w:0xfc:m` are the fuse bits. We are setting the fuses at the same time as uploading the bootloader and the plaid firmware. lfuse, hfuse and efuse refer to low, high and extended fuse bits, respectively
+
+Note, I believe the original author of USBASP made a mistake with the calculation of the extended fuse bit: the original specification called for the extended fuse bit set to 0x04 but this isn't an allowable value. In binary, a hex value of 4 corresponds with 00000100 in binary (i.e., bits 7 to 3: 000000, bit 2: 1 * 4, bit 1: 0 * 2, bit 0: 0 * 1). According to this [fuse calculator](https://www.engbedded.com/fusecalc/), the extended fuse bit is defined according to bit 0, 1 and 2. This corresponds with Brown-out Detector trigger level 0, 1 and 2, respectively. However, for all fuses there are 8 bits and a binary value of 1 actually means _not selected_. Efuse setting 0x04 was probably intended to mean BODLEVEL 2, but the truth is that all other bits _apart from this_ would be set, including bits 3 to 7 which don't apply to the efuse. To set BODLEVEL 2 we actually need the inverse: 11111011 (252, or 256 - 4). In hex, this is 0xfc (f is 15, c is 12, and 15 * 16^1 + 12 * 16^0 = 252) so we will use this fuse setting instead.
+
+### The thorough way
+
+
+
+## Verify
+
+Verify that the bootloader has been burned by entering `avrdude -c avrisp -b 19200 -p m328p -P /dev/ttyUSB0`. You should see the following response.
+
+```
+$ avrdude -c avrisp -b19200 -p m328p -P /dev/ttyUSB0
+avrdude.exe: AVR device initialized and ready to accept instructions
+Reading | ################################################## | 100% 0.00s
+avrdude.exe: Device signature = 0x1e950f (probably m328p)
+avrdude.exe done.  Thank you.
+```
+
+The red led on the keyboard should also light up. Pressing the boot button should also light up the green led. Test a keyboard key by shorting the connections using a jumper wire. If successful, you should be able to type out letters. When I did this the first time I found I could type fine when the Nano was connected but couldn't when I disconnected the power pin between Nano and keyboard. I almost gave up but thankfully tried again once all jumper wires were removed. If things aren't working for you, make sure to disconnect everything before testing individual keys.
+
+## Usage
+
+Now that a bootloader is present on the chip you shouldn't need to program the keyboard using a separate programmer. If you need to change and upload new key mappings then you should be able to do this directly in qmk. With the keyboard connected by usb,
+
+1. Press and hold the reset button
+2. Press and hold the boot button
+3. Release the reset button
+4. Release the boot button.
+
+Let's assume you have a new keymap for the keyboard called _mynewkeymap_ for the the keyboard. In the qmk folder, type `make dm9records/plaid:mynewkeymap:flash`. This will compile the keymap and flash directly without the need for the Nano.
